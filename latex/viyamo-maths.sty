@@ -1,0 +1,49 @@
+% viyamo-maths.sty — shared style for the digitized maths books (maths digitization v2, 2026-09-22)
+% Version: 3 (v2: the rupee sign from DejaVu Serif; v3: maths symbols typed as Unicode in TEXT mode print as their
+% LaTeX symbols instead of blank. Pages should still use the LaTeX commands.) Pinned by the viyamo-tools commit that carries it. Packages: only those installed on Yash's
+% computer and in the coordinator's cloud workspace.
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{viyamo-maths}[2026/09/22 v3 ViYaMo digitized maths]
+\RequirePackage{amsmath,amssymb,graphicx,tabularx,multirow,array,enumitem,geometry,xcolor,cancel}
+\RequirePackage{fontspec}
+\RequirePackage{unicode-math}
+\RequirePackage{newunicodechar}
+\newfontfamily\vyrupeefont{DejaVu Serif}
+\newunicodechar{₹}{{\vyrupeefont ₹}}
+\newunicodechar{α}{\ensuremath{\alpha}}
+\newunicodechar{β}{\ensuremath{\beta}}
+\newunicodechar{γ}{\ensuremath{\gamma}}
+\newunicodechar{θ}{\ensuremath{\theta}}
+\newunicodechar{π}{\ensuremath{\pi}}
+\newunicodechar{∠}{\ensuremath{\angle}}
+\newunicodechar{∴}{\ensuremath{\therefore}}
+\newunicodechar{∵}{\ensuremath{\because}}
+\newunicodechar{△}{\ensuremath{\triangle}}
+\newunicodechar{∆}{\ensuremath{\triangle}}
+\newunicodechar{≠}{\ensuremath{\neq}}
+\newunicodechar{≤}{\ensuremath{\leq}}
+\newunicodechar{≥}{\ensuremath{\geq}}
+\newunicodechar{⊥}{\ensuremath{\perp}}
+\newunicodechar{∥}{\ensuremath{\parallel}}
+\newunicodechar{≅}{\ensuremath{\cong}}
+\newunicodechar{≈}{\ensuremath{\approx}}
+\newunicodechar{∝}{\ensuremath{\propto}}
+\newunicodechar{⋅}{\ensuremath{\cdot}}
+\newunicodechar{∶}{\ensuremath{:}}
+\newunicodechar{⸫}{\ensuremath{\therefore}}
+\geometry{a4paper,margin=18mm}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{4pt}
+% \vyfigdir must be set by the book or page wrapper: the book's folder under Devs/_figures/, with a trailing slash
+\providecommand{\vyfigdir}{}
+% \vyfig[width]{id}: a figure crop, placed where it is printed. Provenance lives in the page's JSON, not on the page.
+\newcommand{\vyfig}[2][0.6\linewidth]{\par\begin{center}\includegraphics[width=#1,height=0.35\textheight,keepaspectratio]{\vyfigdir #2.png}\end{center}\par}
+% \vyfiginline[height]{id}: a small crop printed inside a line of text (a drawn shape, a symbol with no LaTeX form)
+\newcommand{\vyfiginline}[2][1.2em]{\raisebox{-0.3em}{\includegraphics[height=#1]{\vyfigdir #2.png}}}
+% \vypage{n}: the printed page number
+\newcommand{\vypage}[1]{\marginpar{\footnotesize\textcolor{gray}{p.\,#1}}}
+% \vyunclear{best reading}: a glyph or word the page does not show clearly
+\newcommand{\vyunclear}[1]{\textcolor{red}{#1}}
+% \vycont{next|prev}: content continues on the next page / from the previous page
+\newcommand{\vycont}[1]{{\footnotesize\textcolor{gray}{[continued #1]}}}
+\endinput

@@ -1,0 +1,156 @@
+{
+ "contract": "runtime_schema",
+ "version": "1.0",
+ "layer": "RUNTIME",
+ "status": "PROVISIONAL",
+ "what_this_layer_is": "The shape of what the DATABASE holds and mutates after import. Nothing here ships in a unit file. The distinction matters and was never stated: a unit file is tagged and immutable, so anything that changes after extraction — a student's query, a revision, a usage record — cannot live in it without breaking the tagging discipline the whole pipeline rests on.",
+ "companion_documents": {
+  "file": "question_schema_v7 (1.7) — what ships in git",
+  "procedure": "extraction_procedure_v2 — how to read a source, and how it is verified"
+ },
+ "import_rule": "The importer seeds the runtime record from a tagged unit file and never writes back to it. On import it recomputes content_hash under the current normalisation and KEEPS THE TAGGED HASH BESIDE IT (D18: Classes 6-9 migrate at import, not by re-issue). After import the database is authoritative; the file is provenance. PENDING CATEGORIES: a file's pending_category records where the question stood at extraction and never changes. At import the question's category is taken from the defect register's live row (viyamo-record/defects/instances), which is where triage moves, founds and closes instances. The file is never rewritten to follow a move.",
+ "types": {
+  "Query": {
+   "note": "A user says an answer is wrong. This is the mechanism by which a better-informed student corrects a reviewer, which is the reason it exists.",
+   "query_id": "uuid",
+   "question_id": "string — keys to the file layer",
+   "raised_by": "{role: 'student'|'teacher'|'parent'|'reviewer', id: string}",
+   "at": "ISO",
+   "scope": "'answer'|'question_text'|'options'|'marks'|'difficulty'|'figure'|'other'",
+   "claim": "string — MANDATORY free text. A bare thumbs-down generates noise; a sentence generates signal",
+   "proposed": "optional string — their suggested answer",
+   "status": "'open'|'triaged'|'upheld'|'rejected'|'duplicate'",
+   "duplicate_of": "optional query_id",
+   "resolution": {
+    "at": "ISO",
+    "by": "string",
+    "verdict": "string, one line",
+    "kind": "'answer_changed' | 'alternate_accepted' | 'question_retired' | 'no_change'",
+    "revision_before": "number",
+    "revision_after": "number"
+   },
+   "rca": {
+    "origin": "'source_defect'|'extraction_defect'|'authoring_defect'|'review_miss'|'not_a_defect'",
+    "cause_category": "optional — the defect register category id, which is how one student's catch becomes a systemic fix",
+    "swept": "boolean — was the same shape searched for elsewhere",
+    "swept_scope": "'question'|'unit'|'class'|'all' — which of the three levels was done",
+    "swept_found": "number — how many others carried it"
+   }
+  },
+  "QueryRules": {
+   "never_overwrite": "An upheld query produces a NEW revision in the RUNTIME record, keyed by question_id with revision as the join. The tagged file is immutable and is never written back to: its status_history holds the EXTRACTION-time trail only and stops there. Every later transition — review, an upheld query, retirement — is appended runtime-side. The trail therefore spans both layers by design, and this is the join: file = where it started, database = where it continues. Without stating that, the revision trail reads as if it lived in a frozen file.",
+   "mcq_identity": "RULED 2026-09-21. content_hash (text only) is NOT a duplicate test for mcq/mcq_multi: two MCQs with the same stem and different option sets are SIBLINGS — both usable, never both in one paper (the generator excludes a sibling of a picked question). A DUPLICATE needs the same stem AND the same normalised option set AND the same key; only one of a duplicate pair is served. Case of record: sci-7-05-s1-q003/q018 are siblings (their `duplicate of` flag is wrong, corrected at review); sci-7-11-s1-q019/q021 are duplicates.",
+   "identity_survives": "content_hash is computed over `text` only, so correcting an answer does not change the question's identity and its usage history stays attached. This is what makes blast radius answerable.",
+   "resolution_authority": "approval_rules below. A student cannot resolve their own query. Student-audience content needs subject_teacher and management.",
+   "propagation_is_mandatory": "`swept` and `swept_scope` must be filled before a query closes. Nobody may close one without answering 'did this happen elsewhere'. Three levels: fix this question; sweep the unit for the same shape; sweep every unit, because the cause is usually systemic — a parser rule or a source convention.",
+   "blast_radius": "Usage names every paper that carried the wrong answer and every teacher who set it. For a marks-affecting error, notify those teachers; otherwise a silent fix is enough.",
+   "generator_hold": "A question with an open answer-scope query is NOT drawn by the generator until it resolves.",
+   "feeds_the_register": "An upheld query files an instance against its cause_category. A recurring complaint can therefore cross the register's threshold and become an amendment on its own.",
+   "the_metric": "Queries per thousand questions served, split by rca.origin. If extraction_defect dominates, the gate needs work. If source_defect dominates, that is DSERT's problem and it is evidence to take upward rather than absorb."
+  },
+  "BankTier": {
+   "note": "Most wrong answers are already known. Classes 6-9 carry 110 review-blocking flags today. Serving those and waiting for a student to catch them is strictly worse than not serving them. Tiering is the cheapest intervention available and does not need the query system at all.",
+   "A": "clean and reviewed OR machine-verified (rev 5) — the generator draws freely. A machine-verified question is marked as such on every answer key the generator renders",
+   "B": "flagged, category-pending, or authoring verdict 'cannot tell' — held back. Visible to the reviewer, never on a paper",
+   "C": "retired — kept for provenance, never served",
+   "computed_from": "source_flags, pending_category, authoring verification verdict, status, and open answer-scope queries; review state (ReviewState, rev 5)"
+  },
+  "ReviewState": {
+   "note": "RULED 2026-09-21 (Yash; review method v1.2), made a GENERAL RULE 2026-09-22 (all subjects, all classes): question banks go live without human review. The label must say so, everywhere a key is shown.",
+   "question_id": "string",
+   "state": "'machine_verified'|'reviewed' — machine_verified = passed two independent AI science reads, or adjudicated with a reference and (for a changed key) checked by the coordinator. NEVER displayed or counted as 'reviewed'",
+   "outcome": "'kept'|'corrected'|'held'|'incomplete' — incomplete: key stays, marked for the authoring pass; held: tier B, never on a paper, and `state` does not apply",
+   "reference": "optional {kind:'textbook'|'computation', book?, chapter?, printed_page?, quote?, working?} — REQUIRED when outcome is corrected",
+   "decided_by": "string — agent id or coordinator",
+   "at": "ISO",
+   "source": "viyamo-record/review/class-N/review_state.json (one ReviewState per question of the tagged bank; written by review_apply.py, stage 4) — imported runtime-side like every later transition (QueryRules.never_overwrite)",
+   "correction": "optional {answer: string, option_id: string|null} — present only when outcome is corrected: the new key text and, for an MCQ, the new option; the printed key stays in answer_as_printed; answer_provenance becomes 'ai'",
+   "route": "'kept'|'incomplete'|'stage3'|'stage4'|'hold_no_key'|'extra' — the merge route (review method v1.4) the outcome was decided under; audit only",
+   "reason": "optional string — why held/incomplete/corrected, from the read or the verifier; audit and the decisions page"
+  },
+  "QueryIntake": {
+   "note": "RULED 2026-09-21 (Yash). Teachers report a wrong key by commenting ON THE QUESTION where it is displayed — no separate form. This ships with the FIRST release that displays questions; a display without it is incomplete. Each comment becomes a Query (raised_by.role='teacher'; claim = the comment text, mandatory)."
+  },
+  "Usage": {
+   "question_id": "string",
+   "paper_id": "string",
+   "teacher_id": "string",
+   "class": "string",
+   "date": "ISO date"
+  },
+  "Attempt": {
+   "teacher_id": "string",
+   "question_id": "string",
+   "session_id": "string",
+   "verdict": "'correct'|'orange'|'wrong'",
+   "at": "ISO"
+  },
+  "WeakItem": {
+   "teacher_id": "string",
+   "question_id": "string",
+   "reason": "'concept'|'spelling'",
+   "subject": "string",
+   "chapter_id": "string",
+   "active": "boolean",
+   "resolved_at": "optional"
+  },
+  "MarkResult": {
+   "teacher_id": "string",
+   "question_id": "string",
+   "session_id": "string",
+   "at": "ISO",
+   "verdict": "'correct'|'orange'|'wrong'",
+   "marks_awarded": "number",
+   "marks_max": "number",
+   "part_results": "optional",
+   "matched": "string[]",
+   "missed": "string[]",
+   "corrections": "optional",
+   "strict_violations": "optional",
+   "criteria_results": "optional [{criterion_id, marks_awarded}] — for a rubric answer"
+  },
+  "KeywordMatching": {
+   "normalization": "lowercase, strip punctuation, collapse spaces, light stemming (Latin only)",
+   "edit_distance_tolerance": "<=4 chars exact; 5-8 one edit; 9+ two edits (Latin only)",
+   "verdicts": "green correct; orange concept right / misspelled (half marks, spelling event logged); red wrong",
+   "UNSPECIFIED": "Devanagari and Kannada normalisation is not specified and must be before any language pilot. The same gap exists in content_hash and is more dangerous there, because it silently breaks duplicate detection rather than visibly breaking marking."
+  }
+ },
+ "approval_rules": {
+  "audience=student": {
+   "review": [
+    "subject_teacher",
+    "management"
+   ],
+   "go_live": [
+    "subject_teacher",
+    "management"
+   ]
+  },
+  "audience=teacher": {
+   "review": [
+    "management"
+   ],
+   "go_live": [
+    "management"
+   ]
+  },
+  "query_resolution": {
+   "upheld_or_rejected": [
+    "subject_teacher",
+    "management"
+   ],
+   "note": "the raiser may not resolve their own query"
+  }
+ },
+ "enforcement_note": "Approval rules, status transitions, tiering and the send rule are enforced at app level. The schema carries truth; the app carries the lock.",
+ "revisions": [
+  "2026-09-21 rev 2 — the revision bridge to the file layer stated; the prior wording implied the post-import trail lived in the tagged file, which is immutable.",
+  "2026-09-21 rev 2 — companion reference corrected: it named extraction_procedure_v1, superseded by v2 the same day.",
+  "2026-09-21 rev 3 — import takes pending categories from the defect register, not the file; without this a triaged question could never leave the category it was extracted into.",
+  "2026-09-21 rev 4 — import IGNORES top-level unit keys the file schema does not define (Class 7 carries validated_checklist_result, report_summary, review_blocking_flags, state_notes, file_check). They stay in the tagged file as history and are never read as data. Import also treats all three forms of a drawn key as one fact: flag `answer is a diagram — no key text` + empty answer, the placeholder `[diagram answer — see page image]`, and junk values filed in the register (port mapping §6g).",
+  "2026-09-21 rev 5 — ReviewState (machine_verified vs reviewed; outcomes; references) and QueryIntake (comment on the displayed question, from the first release). BankTier A admits machine-verified questions, and every rendered answer key marks them. Generator requirement: the answer-key renderer shows the machine-verified mark per question.",
+  "2026-09-22 rev 5a — ReviewState: the no-human-review rule is general (all subjects), not Science 6-9 only (Yash).",
+  "2026-09-23 rev 6 — ReviewState: `correction`, `route`, `reason` fields and the source file review_state.json (stage 4, review_apply.py). A stem-only STEM_OK verdict leaves the key to the reads; every stage-4 item the verifier did not adjudicate is held."
+ ]
+}
