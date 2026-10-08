@@ -17,7 +17,9 @@ the content sample against the printed page remains the coordinator's.
 import argparse, hashlib, json, os, re, sys, unicodedata
 from collections import Counter
 
-GATE_VERSION = "2.18"
+GATE_VERSION = "2.19"
+# 2.19 (2026-10-08, Yash go): social addendum v1.4 §14 vocabulary + structural checks. Additive: new VOCAB terms are
+# contract-keyed to 1.7; structural checks FAIL only for units whose procedure_file names addendum v1.4+, WARN otherwise.
 # contract_version -> (log in force, contract filename stem)
 CONTRACTS = {"1.5": ("v6", "question_schema_v5"), "1.6": ("v4", "question_schema_v6"),
              "1.7": ("v1", "question_schema_v7"), "1.8": ("v1", "question_schema_v7")}
@@ -69,6 +71,24 @@ VOCAB_17_NEW = ["answer is a diagram", "duplicate stem", "key text differs from 
 # (c8-ext ch6 q023). Contract-keyed like the 1.7 list.
 VOCAB_18_NEW = ["edition marks unclear", "edition marks unclear in key", "key working carries a slip"]
 REVIEW_BLOCKING_17 = REVIEW_BLOCKING | {"displacement boundary", "duplicate stem"}
+# 2.19 additions — social addendum v1.4 §14. Contract-keyed like the 1.7 list.
+VOCAB_19_NEW = ["displaced key", "numbering label misprint", "map truncated in source", "printed key contradicts fact",
+                "match key in label form", "match key value not among column-B items", "options printed with numeric labels",
+                "ordering key in label form", "answer-map labels printed in Kannada"]
+REVIEW_BLOCKING_19 = REVIEW_BLOCKING_17 | {"printed key contradicts fact"}
+# a displaced-key flag must name the lane, the printed label AND the verifying control revision; anything less blocks review
+DISPLACED_FORM = re.compile(r"^displaced key — paired by (position|content) to printed key label \S+; coordinator-verified \(control rev \d+\)")
+DIFF_SOURCES = {"printed", "section_header", "table", "reviewer", "none", "unassigned"}  # unassigned: only with difficulty null
+KANNADA = re.compile(r"[\u0C80-\u0CFF]")
+# HEURISTIC: a stem that asks to mark/locate/identify/show on a map or outline. Used only together with an answer_diagram asset.
+MAP_STEM = re.compile(r"\b(mark|locate|identify|show)\b.{0,60}\b(map|outline)\b|\bmap\b.{0,40}\b(mark|locate|identify)\b", re.I | re.S)
+
+
+def _v14(u: dict) -> bool:
+    """True when the unit was built under social addendum v1.4 or later: structural 2.19 checks FAIL; otherwise they WARN.
+    A thread could dodge strict mode by declaring v1.3 — the coordinator checks procedure_file at READY and at every tag."""
+    m = re.search(r"addendum_v1\.(\d+)", str(u.get("procedure_file", "")))
+    return bool(m) and int(m.group(1)) >= 4
 FLATTENED_NOTATION = re.compile(r"(?<![\w.])(cm3|m3|kg/m3|m/s2|ms-2|ms-1|H2O|CO2|O2|N2|H2|NH4\+|CaCO3|NaCl2|10-\d{1,2}|10\+\d{1,2}|\d0o ?C)(?![\w])")
 # The 10-n / 10+n alternatives are a SCIENCE heuristic for a flattened power of ten ("10-3 m"). In maths the
 # same characters are ordinary arithmetic ("a+(10-1)d"), so for any subject but sci they are not applied
@@ -265,6 +285,8 @@ def issue_prefix(issue: str) -> str:
 def check_unit(u: dict, path: str, images_dir: str | None, rep: Report):
     # ---- file level -------------------------------------------------------
     cv = str(u.get("contract_version", ""))
+    strict = _v14(u)
+    S = rep.F if strict else rep.W  # 2.19 structural checks
     if cv not in CONTRACTS:
         rep.F("file", f"contract_version {cv!r} is not a contract this gate implements ({', '.join(sorted(CONTRACTS))})")
         cv = DEFAULT_CONTRACT
@@ -457,6 +479,11 @@ def check_unit(u: dict, path: str, images_dir: str | None, rep: Report):
                 rep.F(qid, "difficulty null without flag 'no difficulty tag'")
         elif d not in DIFF:
             rep.F(qid, f"difficulty {d!r} not in enum")
+        ds = q.get("difficulty_source")  # 2.19
+        if ds is not None and ds not in DIFF_SOURCES:
+            S(qid, f"difficulty_source {ds!r} not in {'|'.join(sorted(DIFF_SOURCES))} (v1.4 §14.7)")
+        if d is not None and ds in (None, "none", "unassigned"):
+            S(qid, "difficulty set without difficulty_source (v1.4 §14.7)")
         dap = q.get("difficulty_as_printed")
         if dap and re.search(r"[()]", dap):
             rep.F(qid, f"difficulty_as_printed {dap!r} carries tag punctuation (store the bare word)")
@@ -552,6 +579,11 @@ def check_unit(u: dict, path: str, images_dir: str | None, rep: Report):
                 oid = {o.get("id") for o in opts}
                 if len(oid) != len(opts):
                     rep.F(qid, "duplicate option ids")
+                if len(opts) != 4 and "source notation inconsistent" not in fl_prefixes:  # 2.19
+                    S(qid, f"mcq with {len(opts)} options — 4 expected; flag 'source notation inconsistent' if the page prints otherwise")
+                _ids = [str(o.get("id")) for o in opts]
+                if _ids != sorted(_ids):  # 2.19
+                    S(qid, "option ids not in printed order A..D")
                 unpaired = {"shifted numbering", "no answer printed", "key belongs to another paper version"} & set(fl_prefixes)
                 # "key text not among options" WITHOUT "letter kept" means no letter was printed,
                 # so there is nothing to pair to and option_id must be null. With "letter kept" a
@@ -617,12 +649,49 @@ def check_unit(u: dict, path: str, images_dir: str | None, rep: Report):
                 rep.F(qid, "answer looks like a flattened table (space-padded run) with no solution_steps — one step per printed row, cells joined ' | ' (log v6 §1)")
             if "\n" in val.strip() and not q.get("solution_steps"):
                 rep.W(qid, "multi-line answer without solution_steps")
+        # 2.19 — social addendum v1.4 structural checks (strict only for v1.4+ units)
+        if t == "ordering" and kind == "text":
+            S(qid, "ordering answered as text — use {kind:'ordering', sequence:[…]} (v1.4 §14.8)")
+        if t == "match":
+            prs = a.get("pairs")
+            if kind == "match" and (not isinstance(prs, list) or not prs or any(not (isinstance(pp, dict) and pp.get("left") and pp.get("right")) for pp in prs)):
+                rep.F(qid, "match answer must be pairs [{left,right}] with both sides non-empty")
+            if kind == "text" and "match key not in pair form" not in fl_prefixes:
+                S(qid, "match answered as text without flag 'match key not in pair form'")
+        _assets = q.get("assets") or []
+        has_ans_map = any(x.get("role") == "answer_diagram" for x in _assets) and bool(MAP_STEM.search(text or ""))
+        mp = q.get("map")
+        if has_ans_map or mp is not None:
+            if not isinstance(mp, dict):
+                S(qid, "mark-on-map question without a map block (v1.4 §14.11)")
+            else:
+                for k in ("subject", "instruction", "region", "features_source", "features"):
+                    if mp.get(k) in (None, "", []):
+                        S(qid, f"map.{k} missing (addendum §6.2)")
+                for ft in mp.get("features") or []:
+                    for k in ("id", "name", "answer_map_label", "on_answer_map", "in_stem", "position_source"):
+                        if k not in ft:
+                            S(qid, f"map feature {ft.get('id') or '?'} lacks {k} (addendum v1.3 §6.2 / v1.4)")
+                    if ft.get("answer_map_label_source") not in (None, "printed", "translated"):
+                        S(qid, "answer_map_label_source must be 'printed' or 'translated' (v1.4 §14.12)")
+                if mp.get("answer_map_asset_id") and mp["answer_map_asset_id"] not in {x.get("id") for x in _assets}:
+                    rep.F(qid, "map.answer_map_asset_id names no asset on this question")
+                if str(a.get("value") or "").strip() not in ("", "[diagram answer — see page image]") and "no answer printed" not in fl_prefixes:
+                    S(qid, "map question answer.value should be the placeholder '[diagram answer — see page image]' (v1.4 §14.11)")
+        for x in _assets:
+            if x.get("role") == "figure":
+                S(qid, "question-side figure stored as a question asset — use a stimuli[] entry + stimulus_id (v1.4 §14.10)")
+        if KANNADA.search(json.dumps(q, ensure_ascii=False)):  # the bank is English-medium (CLASS9 §6; Yash 2026-10-08)
+            rep.F(qid, "Kannada text stored in the unit — labels are standard English names (v1.4 §14.12)")
+        _answered = bool(str(a.get("value") or "").strip()) or a.get("option_id") is not None or bool(a.get("pairs") or a.get("sequence"))
+        if _answered and "shifted numbering" in fl_prefixes:
+            rep.F(qid, "answer populated but flagged 'shifted numbering' — either empty + pointer, or 'displaced key … coordinator-verified' (v1.4 §14.4)")
         # flags
         seen = set()
         for f in flags:
             iss = f.get("issue", "")
             pre = issue_prefix(iss)
-            allowed = VOCAB + VOCAB_17_NEW + (VOCAB_18_NEW if cv == "1.8" else []) if cv in C17 else VOCAB
+            allowed = VOCAB + VOCAB_17_NEW + VOCAB_19_NEW + (VOCAB_18_NEW if cv == "1.8" else []) if cv in C17 else VOCAB
             if pre not in allowed:
                 rep.F(qid, f"flag issue {iss!r} is not in the defect vocabulary")
             key = (f.get("field"), iss)
@@ -736,7 +805,10 @@ def check_unit(u: dict, path: str, images_dir: str | None, rep: Report):
             if not (isinstance(px.get("w"), int) and isinstance(px.get("h"), int)):
                 rep.W(qid, "asset source_px missing w/h")
         # review-blocking
-        rb = [p for p in fl_prefixes if p in (REVIEW_BLOCKING_17 if cv in C17 else REVIEW_BLOCKING)]
+        rb = [p for p in fl_prefixes if p in (REVIEW_BLOCKING_19 if cv in C17 else REVIEW_BLOCKING)]
+        for f in flags:  # 2.19: an unverified / malformed displaced-key pairing blocks review
+            if issue_prefix(f.get("issue", "")) == "displaced key" and not DISPLACED_FORM.match(f.get("issue", "")):
+                rb.append("displaced key (unverified form)")
         if rb:
             rep.I(qid, f"review-blocking: {rb}")
     # every file in this unit's image folder must be referenced by this unit
